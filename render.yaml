@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: earthtrend-explorer
+    runtime: python
+    plan: free
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.14"
+      - key: EARTH_TREND_PUBLIC
+        value: "1"
+      - key: TREND_GLOBE_DEMO
+        value: "0"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"

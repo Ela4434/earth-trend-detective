@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart
+requests
+numpy
+pandas>=2.0
+scipy
+statsmodels>=0.14
+pymannkendall>=1.4.3
+httpx
