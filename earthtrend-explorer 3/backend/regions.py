@@ -188,10 +188,21 @@ def public(r: dict) -> dict:
 def _inside(lon, lat, ring):
     x, y = ring[:, 0], ring[:, 1]
     x2, y2 = np.roll(x, -1), np.roll(y, -1)
-    lon = np.asarray(lon)[:, None]
-    lat = np.asarray(lat)[:, None]
-    cond = ((y > lat) != (y2 > lat)) & (lon < (x2 - x) * (lat - y) / np.where(y2 - y == 0, 1e-12, y2 - y) + x)
-    return cond.sum(axis=1) % 2 == 1
+    result = np.zeros(len(lon), dtype=bool)
+    # A regular grid uses the same latitude for many longitudes. Calculate the
+    # crossings once per latitude to avoid a dense points-by-edges matrix.
+    order = np.argsort(lat)
+    sorted_lat = lat[order]
+    latitudes, starts = np.unique(sorted_lat, return_index=True)
+    stops = np.r_[starts[1:], len(order)]
+    for latitude, start, stop in zip(latitudes, starts, stops):
+        edges = (y > latitude) != (y2 > latitude)
+        if edges.any():
+            crossings = x[edges] + (x2[edges] - x[edges]) * (latitude - y[edges]) / (y2[edges] - y[edges])
+            indices = order[start:stop]
+            left = np.searchsorted(np.sort(crossings), lon[indices], side="right")
+            result[indices] = (len(crossings) - left) % 2 == 1
+    return result
 
 
 def inside(region, lon, lat):
