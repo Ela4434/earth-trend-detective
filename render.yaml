@@ -3,6 +3,7 @@ services:
     name: earthtrend-explorer
     runtime: python
     plan: free
+    rootDir: "earthtrend-explorer 3"
     buildCommand: python -m pip install -r requirements.txt
     startCommand: python -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
