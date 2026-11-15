@@ -25,6 +25,27 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error((j && j.detail) || `HTTP ${r.status}`);
   return j;
 }
+
+let plotlyRequest;
+function loadPlotly() {
+  if (window.Plotly) return Promise.resolve(window.Plotly);
+  if (!plotlyRequest) {
+    plotlyRequest = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/static/vendor/plotly.min.js";
+      script.onload = () => {
+        if (window.Plotly) resolve(window.Plotly);
+        else reject(new Error("Could not load the chart. Try again."));
+      };
+      script.onerror = () => reject(new Error("Could not load the chart. Try again."));
+      document.head.append(script);
+    }).catch((error) => {
+      plotlyRequest = null;
+      throw error;
+    });
+  }
+  return plotlyRequest;
+}
 function toast(msg, err = false, ms = 4200) {
   const t = $("#toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : "");
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), ms);
@@ -72,11 +93,7 @@ function layout(extra) { return Object.assign(JSON.parse(JSON.stringify(PLOT)), 
 
 // ---------------------------------------------------------------- globe
 let globe;
-async function initGlobe() {
-  const [topo, profiles] = await Promise.all([
-    api("/geo/countries-50m.json"),
-    api("/static/country-profiles.json").catch(() => ({})),
-  ]);
+function initGlobe(topo, profiles) {
   S.profiles = profiles;
   S.features = topojson.feature(topo, topo.objects.countries).features.filter((f) => f.properties.name !== "Antarctica");
   const el = $("#globe");
@@ -313,7 +330,10 @@ async function chooseOverviewVar(vid) {
   if (!expanded) return;
   box.innerHTML = `<div class="loading"><span class="spin"></span>Loading your graph…</div>`;
   try {
-    const data = await api(`/api/region/${encodeURIComponent(S.region.id)}/variable/${encodeURIComponent(vid)}${periodQuery()}`);
+    const [data] = await Promise.all([
+      api(`/api/region/${encodeURIComponent(S.region.id)}/variable/${encodeURIComponent(vid)}${periodQuery()}`),
+      loadPlotly(),
+    ]);
     if (request !== S.detailRequest) return;
     const st = v.stats;
     const analysis = data.stats;
@@ -487,7 +507,12 @@ async function openDetail(vid) {
   $("#modal-body").innerHTML = `<div class="loading"><div class="spin"></div>Loading…</div>`;
   $("#modal").classList.remove("hidden");
   let d;
-  try { d = await api(`/api/region/${encodeURIComponent(rid)}/variable/${encodeURIComponent(vid)}${periodQuery()}`); }
+  try {
+    [d] = await Promise.all([
+      api(`/api/region/${encodeURIComponent(rid)}/variable/${encodeURIComponent(vid)}${periodQuery()}`),
+      loadPlotly(),
+    ]);
+  }
   catch (e) { $("#modal-body").innerHTML = `<p class="caveat">${esc(e.message)}</p>`; return; }
   const s = d.stats, u = d.unit;
   const fromSummary = (S.summary.variables.find((v) => v.id === vid) || {}).stats;
@@ -622,7 +647,10 @@ async function runRel() {
   const method = $("#rel-method").value, mode = $("#rel-mode").value, lags = $("#rel-lags").checked;
   out.innerHTML = `<div class="loading" style="margin-top:8px"><div class="spin"></div>Running ${vars.length * (vars.length - 1) / 2} tests…</div>`;
   try {
-    const r = await api(`/api/region/${encodeURIComponent(S.region.id)}/relations`, { json: { vars, method, mode, lags, ...periodBody() } });
+    const [r] = await Promise.all([
+      api(`/api/region/${encodeURIComponent(S.region.id)}/relations`, { json: { vars, method, mode, lags, ...periodBody() } }),
+      loadPlotly(),
+    ]);
     S.relResult = r;
     const sym = { pearson: "r", spearman: "ρ", kendall: "τ" }[method];
     const L = r.labels, cols = r.cols;
@@ -700,7 +728,10 @@ async function runCmp() {
   const out = $("#cmp-out"), v = $("#cmp-var").value;
   out.innerHTML = `<div class="loading"><div class="spin"></div>Fetching ${esc(S.cmpRegion.name)}…</div>`;
   try {
-    const r = await api("/api/compare", { json: { a: S.region.id, b: S.cmpRegion.id, var: v, start: periodBody().start, end: periodBody().end } });
+    const [r] = await Promise.all([
+      api("/api/compare", { json: { a: S.region.id, b: S.cmpRegion.id, var: v, start: periodBody().start, end: periodBody().end } }),
+      loadPlotly(),
+    ]);
     out.innerHTML = `<p style="margin-top:10px">${r.mirror ? "<b style='color:var(--accent2)'>MIRROR TREND · </b>" : ""}${esc(r.text)}</p><div id="cmp-plot" class="plot" style="height:300px"></div>
       <div class="note">Difference tested with the Hamed-Rao Mann-Kendall test on (anomaly A − anomaly B), so shared weather and shared data artefacts cancel out.</div>`;
     Plotly.newPlot("cmp-plot", [
@@ -790,7 +821,12 @@ async function boot() {
     trigger.onclick = () => setSidebar(side, trigger.getAttribute("aria-expanded") !== "true");
     $("#close-" + side).onclick = () => { setSidebar(side, false); trigger.focus(); };
   }
-  S.meta = await api("/api/meta");
+  const [meta, topo, profiles] = await Promise.all([
+    api("/api/meta"),
+    api("/geo/countries-50m.json"),
+    api("/static/country-profiles.json").catch(() => ({})),
+  ]);
+  S.meta = meta;
   $("#demo-banner").classList.toggle("hidden", !S.meta.demo);
   if (S.meta.public_site) {
     $(".upload").classList.add("hidden");
@@ -799,12 +835,13 @@ async function boot() {
   if (!S.meta.exact_statistics) toast("For full published Mann–Kendall tests, install pymannkendall as in requirements.txt", true, 9500);
   $("#scan-var").innerHTML = Object.entries(S.meta.variables).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
   renderMethod();
-  await initGlobe();
+  initGlobe(topo, profiles);
   setupSearch($("#search"), $("#search-results"), selectRegion);
   $$(".example").forEach((b) => b.addEventListener("click", async () => {
     try { const bundled = b.hasAttribute("data-demo") && S.meta.giovanni.some(file => file.bbox?.join(",") === "16,45,23,48.5");
-      const rs = await api("/api/search?q=" + encodeURIComponent(b.dataset.region));
-      const selected = bundled ? {id: "g-16_45_23_48.5", name: "Carpathian Basin study box", label: "Carpathian Basin study box", kind: "box"} : rs[0];
+      const selected = bundled
+        ? {id: "g-16_45_23_48.5", name: "Carpathian Basin study box", label: "Carpathian Basin study box", kind: "box"}
+        : (await api("/api/search?q=" + encodeURIComponent(b.dataset.region)))[0];
       if (selected) selectRegion(selected); }
     catch(e) { toast(e.message, true); }
   }));
@@ -841,7 +878,7 @@ async function boot() {
     }
     e.target.value = "";
   };
-  pollScan();
+  if (!S.meta.public_site) pollScan();
   const h = decodeURIComponent(location.hash.slice(1));
   if (h) { const r = await api("/api/search?q=" + encodeURIComponent(h)); if (r[0]) selectRegion(r[0]); }
 }
